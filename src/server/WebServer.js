@@ -9,7 +9,29 @@ const path = require('path');
 const serveStatic = require('serve-static');
 const ExportServer = require('./ExportServer.js');
 const { RequestCancelError } = require('../exception.js');
+const { Storage, File } = require('@google-cloud/storage');
 
+function doRequest(url) {
+    return new Promise((resolve, reject) => {
+        const req = https.get(url, (res) => {
+            let responseBody = '';
+
+            res.on('data', (chunk) => {
+                responseBody += chunk;
+            });
+
+            res.on('end', () => {
+                resolve(JSON.parse(responseBody));
+            });
+        });
+
+        req.on('error', (err) => {
+            reject(err);
+        });
+    });
+}
+
+  
 module.exports = class WebServer extends ExportServer {
     constructor(config) {
         super(config);
@@ -36,6 +58,7 @@ module.exports = class WebServer extends ExportServer {
         app.use(addRequestId);
         app.use(bodyParser.json({ limit : options.maximum || '50mb' }));
         app.use(bodyParser.urlencoded({ extended : false, limit : options.maximum || '50mb' }));
+        app.enable('trust proxy');
 
         //Set CORS
         if (options.cors !== 'false') {
@@ -82,8 +105,14 @@ module.exports = class WebServer extends ExportServer {
 
         //Catch the posted request.
         if (!options.dedicated) {
-            app.post('/', (req, res) => {
-                const request = req.body;
+            app.post('/', async (req, res) => {
+                let request = req.body;
+                const originalRequest = request
+
+                if(request.signedUrl){
+                    const bodyAsFile = await doRequest(request.signedUrl);
+                    request = bodyAsFile;
+                }
 
                 //Accepts encoded and parsed html fragments. If still encoded, then parse
                 if (typeof request.html === 'string') {
@@ -94,7 +123,7 @@ module.exports = class WebServer extends ExportServer {
                 me.logger.log('verbose', `POST request ${req.id} headers: ${JSON.stringify(req.headers)}`);
 
                 //Pass the request to the processFn
-                me.exportRequestHandler(request, req.id, req).then(file => {
+                me.exportRequestHandler(request, req.id, req).then(async file => {
                     me.logger.log('info', `POST request ${req.id} succeeded`);
 
                     //On binary the buffer is directly sent to the client, else store file locally in memory for 10 seconds
@@ -103,11 +132,20 @@ module.exports = class WebServer extends ExportServer {
                         res.status(200).send(file);
                     }
                     else {
-                        //Send the url for the cached file, will is cached for 10 seconds
-                        res.status(200).jsonp({
-                            success : true,
-                            url     : me.setFile(req.protocol + '://' + req.get('host') + req.originalUrl, request, file)
-                        });
+                        if(options.gcp){
+                          const fileUrl = await me.setGCPFile(originalRequest, file)
+                          res.status(200).jsonp({
+                              success : true,
+                              url     : fileUrl
+                          });
+                        }
+                        else {
+                          //Send the url for the cached file, will is cached for 10 seconds
+                          res.status(200).jsonp({
+                              success : true,
+                              url     : me.setFile(req.protocol + '://' + req.get('host') + req.originalUrl, request, file)
+                          });
+                        }
                     }
                 }).catch(e => {
                     if (e instanceof RequestCancelError) {
@@ -179,6 +217,29 @@ module.exports = class WebServer extends ExportServer {
         }, 10000);
 
         return url;
+    }
+
+    /**
+     * Stores a file streams on GCP to be fetched on guid
+     *
+     * @param fileBuffer The file buffer pdf/png
+     * @returns {*}
+     */
+    async setGCPFile(request, fileBuffer) {
+      const { bucket: bucketName, gcpName, name } = request
+
+      const bucket = new Storage().bucket(bucketName);
+      const file = new File(bucket, gcpName);
+
+      await file.save(fileBuffer);
+
+      const [url] = await file.getSignedUrl({
+        action: 'read',
+        responseDisposition: `attachment; filename=${name}`,
+        expires: Date.now() + 60 * 60 * 1000 /* 1h */
+      });
+
+      return url;
     }
 
     //Create http server instance

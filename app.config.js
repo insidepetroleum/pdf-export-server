@@ -9,19 +9,22 @@ const config = {
     "cors"          : "*",
 
     // Maximum size of the uploaded data
-    "maximum"       : null,
+    "maximum"       : '5000mb',
 
     // Path to static resources to be served. See readme.md for details
-    "resources"     : null,
+    "resources"     : "./src/resources",
 
     // True to pass `--no-sandbox` flag to the chromium
     "no-sandbox"    : true,
+
+    // True to pass `--disable-web-security` flag to the chromium
+    "disable-web-security": true,
 
     // Maximum amount of parallel puppeteer instances to run
     "max-workers"   : 5,
 
     // Log level. Possible values: error, warn, info, verbose
-    "level"         : "info",
+    "level"         : "verbose",
 
     // Pass true to wait for page load only (fonts may be missing). Reduces page loading time by at least .5s
     "quick"          : false,
@@ -31,15 +34,10 @@ const config = {
 
     // Configuration options for logger
     // Set to false to output log to the console
-    "logger"        : {
-        "rotate"    : {
-            "dirname"     : "log",
-            "filename"    : "export-server-%DATE%.log",
-            "datePattern" : "YYYY-MM-DD",
-            "maxSize"     : "20mb",
-            "maxFiles"    : "30d"
-        }
-    }
+    "logger"        : false,
+
+    // Upload file to GCP instead of temporary buffer
+    "gcp"           : true,
 };
 
 module.exports = { config };
